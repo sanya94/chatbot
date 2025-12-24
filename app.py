@@ -1,6 +1,6 @@
 # END-TO-END PERSONAL MULTI-USER CHATBOT
-# Private per-browser threads via localStorage
-# Persistent titles in chat_titles.json (with safety cleaning)
+# Chats are private per username (each user sees only their own threads)
+# Persistent titles in chat_titles.json, browser localStorage for thread_id
 
 import streamlit as st
 from langchain_groq import ChatGroq
@@ -25,7 +25,7 @@ if "chat_titles" not in st.session_state:
         try:
             with open(TITLES_FILE, "r") as f:
                 st.session_state.chat_titles = json.load(f)
-            # Safety: remove any invalid keys (like DeltaGenerator)
+            # Safety: remove invalid keys
             st.session_state.chat_titles = {
                 k: v for k, v in st.session_state.chat_titles.items()
                 if isinstance(k, (str, int, float, bool, type(None)))
@@ -36,7 +36,6 @@ if "chat_titles" not in st.session_state:
         st.session_state.chat_titles = {}
 
 def save_titles():
-    # Safety: only save valid keys
     clean_titles = {
         k: v for k, v in st.session_state.chat_titles.items()
         if isinstance(k, (str, int, float, bool, type(None)))
@@ -58,7 +57,18 @@ if "thread_id" not in st.session_state:
     )
     st.session_state.thread_id = component_value if component_value else str(uuid.uuid4())
 
-thread_id = st.session_state.thread_id
+raw_thread_id = st.session_state.thread_id
+
+# ────────────── USERNAME INPUT (makes chats personal per user) ──────────────
+with st.sidebar:
+    st.header("Login")
+    username = st.text_input("Enter your username", key="username_input")
+    if not username:
+        st.info("Please enter a username to start chatting.")
+        st.stop()  # Stop execution until username is entered
+
+# Prefix thread_id with username for privacy
+thread_id = f"{username}::{raw_thread_id}"
 
 # ────────────── LANGGRAPH + SQLITE SETUP ──────────────
 conn = SqliteSaver.from_conn_string("chat_history.db")
@@ -90,18 +100,15 @@ graph = graph_builder.compile(checkpointer=memory)
 
 # ────────────── STREAMLIT UI ──────────────
 st.set_page_config(page_title="Chatbot", page_icon="🤖")
-st.title("Chatbot 🔥 (CI/CD Test)")
+st.title("Chatbot 🔥")
 
-# ────────────── SIDEBAR ──────────────
+# ────────────── SIDEBAR (continued) ──────────────
 with st.sidebar:
-    st.header("About")
-    st.write("Persistent chatbot using **LangGraph + SQLite**")
-    st.caption("Model: llama-3.3-70b-versatile")
     st.divider()
-    st.subheader("Chat History")
+    st.subheader("Your Chat History")
 
     if st.button("✨ New Chat", type="primary"):
-        new_id = str(uuid.uuid4())
+        new_id = f"{username}::{uuid.uuid4()}"
         st.session_state.current_chat_id = new_id
         st.session_state.chat_titles[new_id] = "New Chat"
         save_titles()
@@ -111,6 +118,9 @@ with st.sidebar:
     threads = {}
     for cp in all_checkpoints:
         tid = cp.config["configurable"]["thread_id"]
+        # Only show threads belonging to this user
+        if not tid.startswith(f"{username}::"):
+            continue
         ts = cp.checkpoint["ts"]
         if tid not in threads or ts > threads[tid].checkpoint["ts"]:
             threads[tid] = cp
